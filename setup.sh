@@ -10,6 +10,17 @@ R='\033[0;31m'  G='\033[0;32m'
 Y='\033[1;33m'  C='\033[0;36m'
 B='\033[1m'     N='\033[0m'
 
+# ─── تشخیص دسترسی sudo/root ────────────────────────────────
+if [ "$(id -u)" = "0" ]; then
+    SUDO=""
+else
+    if command -v sudo &> /dev/null; then
+        SUDO="sudo"
+    else
+        SUDO=""
+    fi
+fi
+
 clear
 echo -e "${C}${B}"
 cat << 'BANNER'
@@ -19,6 +30,110 @@ cat << 'BANNER'
 ╚══════════════════════════════════════════════╝
 BANNER
 echo -e "${N}"
+
+# ═══════════════════════════════════════════════════════════
+#   🧩 بررسی و نصب خودکار پیش‌نیازهای سیستم
+# ═══════════════════════════════════════════════════════════
+echo -e "${Y}${B}🧩 در حال بررسی پیش‌نیازهای سیستم...${N}\n"
+
+# به‌روزرسانی لیست پکیج‌ها یک‌بار در ابتدا (در صورت وجود apt)
+PKG_UPDATED=0
+apt_update_once() {
+    if [ "$PKG_UPDATED" = "0" ] && command -v apt-get &> /dev/null; then
+        echo -e "${C}🔄 در حال به‌روزرسانی لیست پکیج‌های سیستم...${N}"
+        $SUDO apt-get update -y &> /dev/null
+        PKG_UPDATED=1
+    fi
+}
+
+# ── curl ──
+if ! command -v curl &> /dev/null; then
+    echo -e "${C}🔄 curl نصب نیست. در حال نصب...${N}"
+    apt_update_once
+    $SUDO apt-get install -y curl &> /dev/null
+fi
+if command -v curl &> /dev/null; then
+    echo -e "${G}✅ curl آماده است.${N}"
+else
+    echo -e "${R}❌ نصب curl ناموفق بود. لطفاً دستی نصب کنید: apt-get install curl${N}"
+fi
+
+# ── Python3 ──
+if ! command -v python3 &> /dev/null; then
+    echo -e "${C}🔄 پایتون ۳ نصب نیست. در حال نصب...${N}"
+    apt_update_once
+    $SUDO apt-get install -y python3 &> /dev/null
+fi
+if command -v python3 &> /dev/null; then
+    PY_VER=$(python3 --version 2>&1)
+    echo -e "${G}✅ پایتون آماده است. (${PY_VER})${N}"
+else
+    echo -e "${R}❌ نصب پایتون ناموفق بود. اسکریپت نمی‌تواند ادامه یابد.${N}"
+    exit 1
+fi
+
+# ── pip (با پشتیبانی از externally-managed-environment) ──
+if ! python3 -m pip --version &> /dev/null; then
+    echo -e "${C}🔄 pip نصب نیست. در حال نصب...${N}"
+    apt_update_once
+    $SUDO apt-get install -y python3-pip &> /dev/null
+    if ! python3 -m pip --version &> /dev/null; then
+        curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+        python3 /tmp/get-pip.py --break-system-packages &> /dev/null || python3 /tmp/get-pip.py &> /dev/null
+    fi
+fi
+if python3 -m pip --version &> /dev/null; then
+    echo -e "${G}✅ pip آماده است.${N}"
+    # تعیین اینکه آیا --break-system-packages پشتیبانی و لازم است
+    if python3 -m pip install --break-system-packages --help &> /dev/null; then
+        PIP_INSTALL="python3 -m pip install -q --break-system-packages"
+    else
+        PIP_INSTALL="python3 -m pip install -q"
+    fi
+else
+    echo -e "${R}❌ نصب pip ناموفق بود. اسکریپت نمی‌تواند ادامه یابد.${N}"
+    exit 1
+fi
+
+# ── پیش‌نیازهای Docker ──
+DOCKER_DEPS="ca-certificates curl gnupg lsb-release apt-transport-https"
+if command -v apt-get &> /dev/null; then
+    echo -e "${C}🔄 در حال بررسی پیش‌نیازهای داکر...${N}"
+    apt_update_once
+    $SUDO apt-get install -y $DOCKER_DEPS &> /dev/null
+    echo -e "${G}✅ پیش‌نیازهای داکر آماده شدند.${N}"
+fi
+
+# ── Docker ──
+if ! command -v docker &> /dev/null; then
+    echo -e "${C}🔄 داکر نصب نیست. در حال نصب خودکار داکر (ممکن است چند دقیقه طول بکشد)...${N}"
+    curl -fsSL https://get.docker.com | $SUDO sh
+fi
+if command -v docker &> /dev/null; then
+    echo -e "${G}✅ داکر نصب است. (نسخه: $(docker --version 2>/dev/null))${N}"
+    # تلاش برای بالا آوردن سرویس داکر
+    if command -v systemctl &> /dev/null; then
+        $SUDO systemctl start docker &> /dev/null
+        $SUDO systemctl enable docker &> /dev/null
+    elif command -v service &> /dev/null; then
+        $SUDO service docker start &> /dev/null
+    fi
+    # بررسی در دسترس بودن واقعی دیمون داکر
+    if docker info &> /dev/null; then
+        echo -e "${G}✅ دیمون داکر فعال و در دسترس است.${N}"
+        DOCKER_READY=1
+    else
+        echo -e "${R}⚠️ داکر نصب است ولی دیمون آن در دسترس نیست (ممکن است محیط شما اجازه اجرای داکر داخلی/nested را ندهد).${N}"
+        echo -e "${Y}   ربات بدون سرور محلی تلگرام (با محدودیت آپلود ۵۰ مگابایت استاندارد) اجرا خواهد شد.${N}"
+        DOCKER_READY=0
+    fi
+else
+    echo -e "${R}⚠️ نصب داکر ناموفق بود یا در این محیط مجاز نیست.${N}"
+    echo -e "${Y}   ربات بدون سرور محلی تلگرام (با محدودیت آپلود ۵۰ مگابایت استاندارد) اجرا خواهد شد.${N}"
+    DOCKER_READY=0
+fi
+
+echo -e "\n${G}${B}✅ بررسی پیش‌نیازها به پایان رسید.${N}\n"
 
 # ─── Get Bot Credentials ────────────────────────────────────
 echo -e "${Y}🔑 توکن ربات تلگرامت رو وارد کن:${N}"
@@ -59,17 +174,45 @@ mkdir -p "$BOT_DIR/downloads"
 cd "$BOT_DIR"
 
 # ════════════════════════════════════════════════════════════
-#  بررسی FFmpeg جهت تبدیل فرمت‌ها (بدون sudo)
+#  راه‌اندازی سرور محلی تلگرام (Docker & Local Bot API)
+# ════════════════════════════════════════════════════════════
+if [ "$DOCKER_READY" = "1" ]; then
+    echo -e "\n${Y}🐳 در حال راه‌اندازی سرور محلی تلگرام...${N}"
+
+    docker stop telegram-bot-api &> /dev/null
+    docker rm telegram-bot-api &> /dev/null
+
+    docker run -d \
+      --name telegram-bot-api \
+      --restart always \
+      -p 8081:8081 \
+      -v telegram-bot-api-data:/var/lib/telegram-bot-api \
+      -e TELEGRAM_API_ID="${TELEGRAM_API_ID}" \
+      -e TELEGRAM_API_HASH="${TELEGRAM_API_HASH}" \
+      aiogram/telegram-bot-api:latest
+
+    if [ $? -eq 0 ]; then
+        echo -e "${G}✅ سرور محلی تلگرام روی پورت 8081 فعال شد.${N}"
+    else
+        echo -e "${R}⚠️ اجرای کانتینر سرور محلی ناموفق بود. ربات با API استاندارد تلگرام اجرا می‌شود.${N}"
+        DOCKER_READY=0
+    fi
+else
+    echo -e "\n${Y}ℹ️ سرور محلی تلگرام راه‌اندازی نمی‌شود (داکر در دسترس نیست). ربات از API استاندارد تلگرام استفاده می‌کند.${N}"
+fi
+
+# ════════════════════════════════════════════════════════════
+#  بررسی و نصب FFmpeg جهت تبدیل فرمت‌ها
 # ════════════════════════════════════════════════════════════
 if ! command -v ffmpeg &> /dev/null; then
-    echo -e "${C}🔄 اف‌ام‌پگ نصب نیست. در حال تلاش برای نصب...${N}"
-    if command -v sudo &> /dev/null; then
-        sudo apt-get update && sudo apt-get install -y ffmpeg
-    elif [ "$(id -u)" = "0" ]; then
-        apt-get update && apt-get install -y ffmpeg
-    else
-        echo -e "${R}⚠️ نصب خودکار ffmpeg ممکن نشد. دستی نصب کنید: apt-get install ffmpeg${N}"
-    fi
+    echo -e "${C}🔄 اف‌ام‌پگ نصب نیست. در حال نصب ffmpeg...${N}"
+    apt_update_once
+    $SUDO apt-get install -y ffmpeg
+fi
+if command -v ffmpeg &> /dev/null; then
+    echo -e "${G}✅ ffmpeg آماده است.${N}"
+else
+    echo -e "${R}⚠️ نصب ffmpeg ناموفق بود. تبدیل فرمت صوتی ممکن است کار نکند.${N}"
 fi
 
 # ════════════════════════════════════════════════════════════
@@ -94,8 +237,8 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN", "")
 ADMIN_IDS   = list(map(int, os.getenv("ADMIN_IDS", "0").split(",")))
 
 DOWNLOAD_PATH    = "./downloads"
-MAX_FILE_SIZE    = 50 * 1024 * 1024        # 50MB Telegram Bot API hard limit (no local server)
-DEFAULT_USER_LIMIT = 50 * 1024 * 1024      # 50MB default limit for normal users
+MAX_FILE_SIZE    = 2 * 1024 * 1024 * 1024  # 2GB Telegram hard limit
+DEFAULT_USER_LIMIT = 200 * 1024 * 1024     # 200MB default limit for normal users
 
 SUPPORTED_PLATFORMS = {
     "youtube":     {"emoji": "🎬", "name": "YouTube"},
@@ -229,6 +372,15 @@ STRINGS = {
     }
 }
 PYEOF
+
+# مقادیر محدودیت حجم بسته به فعال بودن سرور محلی تلگرام تنظیم می‌شود
+if [ "$DOCKER_READY" = "1" ]; then
+    sed -i 's/^MAX_FILE_SIZE.*/MAX_FILE_SIZE    = 2 * 1024 * 1024 * 1024  # 2GB (سرور محلی تلگرام فعال است)/' config.py
+    sed -i 's/^DEFAULT_USER_LIMIT.*/DEFAULT_USER_LIMIT = 200 * 1024 * 1024     # 200MB default limit for normal users/' config.py
+else
+    sed -i 's/^MAX_FILE_SIZE.*/MAX_FILE_SIZE    = 50 * 1024 * 1024        # 50MB (محدودیت API استاندارد تلگرام، بدون سرور محلی)/' config.py
+    sed -i 's/^DEFAULT_USER_LIMIT.*/DEFAULT_USER_LIMIT = 50 * 1024 * 1024      # 50MB default limit for normal users/' config.py
+fi
 
 # ════════════════════════════════════════════════════════════
 #  ساخت فایل اصلی bot.py (سیستم VIP حروفی/عددی و قفل چندکاناله)
@@ -1211,6 +1363,12 @@ def main():
 
 if __name__ == "__main__": main()
 PYEOF
+
+# خط اتصال ربات بسته به فعال بودن سرور محلی تلگرام تنظیم می‌شود
+if [ "$DOCKER_READY" = "1" ]; then
+    sed -i 's|app = Application.builder().token(config.BOT_TOKEN).read_timeout(600).write_timeout(600).build()|app = Application.builder().token(config.BOT_TOKEN).base_url("http://localhost:8081/bot").local_mode(True).read_timeout(600).write_timeout(600).build()|' bot.py
+fi
+
 echo -e "${G}✅ bot.py با ساختار جدید با موفقیت بازنویسی شد${N}"
 
 # ════════════════════════════════════════════════════════════
@@ -1232,7 +1390,14 @@ EOF
 cat > run.sh << 'RUNEOF'
 #!/bin/bash
 cd "$HOME/downloader-bot" || exit 1
-python3 -m pip install -q --upgrade yt-dlp
+if command -v docker &> /dev/null; then
+    docker start telegram-bot-api &> /dev/null
+fi
+if python3 -m pip install --break-system-packages --help &> /dev/null; then
+    python3 -m pip install -q --break-system-packages --upgrade yt-dlp
+else
+    python3 -m pip install -q --upgrade yt-dlp
+fi
 python3 bot.py
 RUNEOF
 chmod +x run.sh
@@ -1240,15 +1405,22 @@ chmod +x run.sh
 # ════════════════════════════════════════════════════════════
 #  نصب پکیج‌ها
 # ════════════════════════════════════════════════════════════
-echo -e "\n${Y}📦 در حال نصب پکیج‌های جدید...${N}"
-if command -v pip3 &> /dev/null; then
-    PIP_CMD="pip3"
-else
-    PIP_CMD="python3 -m pip"
-fi
-$PIP_CMD install -q -r requirements.txt
-$PIP_CMD install -q --upgrade yt-dlp
+echo -e "\n${Y}📦 در حال نصب پکیج‌های جدید و فعال‌سازی موتور مانیتورینگ سرور...${N}"
+$PIP_INSTALL -r requirements.txt
+$PIP_INSTALL --upgrade yt-dlp
 echo -e "${G}✅ همه پکیج‌های پیشرفته نصب شدند.${N}"
+
+# ════════════════════════════════════════════════════════════
+#  خلاصه نهایی وضعیت پیش‌نیازها
+# ════════════════════════════════════════════════════════════
+echo -e "\n${C}${B}📋 خلاصه وضعیت پیش‌نیازها:${N}"
+command -v python3 &> /dev/null && echo -e "   ${G}✅ Python3${N}" || echo -e "   ${R}❌ Python3${N}"
+python3 -m pip --version &> /dev/null && echo -e "   ${G}✅ pip${N}" || echo -e "   ${R}❌ pip${N}"
+command -v docker &> /dev/null && echo -e "   ${G}✅ Docker نصب${N}" || echo -e "   ${R}❌ Docker نصب${N}"
+[ "$DOCKER_READY" = "1" ] && echo -e "   ${G}✅ Docker daemon فعال (سرور محلی تلگرام: فعال، حد ۲GB)${N}" || echo -e "   ${Y}⚠️  Docker daemon غیرفعال (API استاندارد تلگرام، حد ۵۰MB)${N}"
+command -v ffmpeg &> /dev/null && echo -e "   ${G}✅ ffmpeg${N}" || echo -e "   ${R}❌ ffmpeg${N}"
+python3 -c "import yt_dlp" &> /dev/null && echo -e "   ${G}✅ yt-dlp${N}" || echo -e "   ${R}❌ yt-dlp${N}"
+python3 -c "import telegram" &> /dev/null && echo -e "   ${G}✅ python-telegram-bot و بقیه requirements.txt${N}" || echo -e "   ${R}❌ python-telegram-bot (پکیج‌های requirements.txt را بررسی کنید)${N}"
 
 echo -e "\n${G}🚀 سوپر ربات با موفقیت آپدیت شد! با دستور زیر روشن کن رئیس:${N}"
 echo -e "${C}python3 bot.py${N}\n"
