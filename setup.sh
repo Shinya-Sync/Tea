@@ -10,7 +10,7 @@ R='\033[0;31m'  G='\033[0;32m'
 Y='\033[1;33m'  C='\033[0;36m'
 B='\033[1m'     N='\033[0m'
 
-clear 2>/dev/null || true
+clear
 echo -e "${C}${B}"
 cat << 'BANNER'
 ╔══════════════════════════════════════════════╗
@@ -53,22 +53,6 @@ if [ -z "$ADMIN_ID" ]; then
     exit 1
 fi
 
-# ─── پاکسازی ورودی‌ها (فاصله/enter اضافی هنگام paste) ───────
-BOT_TOKEN=$(echo "$BOT_TOKEN" | tr -d '[:space:]')
-TELEGRAM_API_ID=$(echo "$TELEGRAM_API_ID" | tr -d '[:space:]')
-TELEGRAM_API_HASH=$(echo "$TELEGRAM_API_HASH" | tr -d '[:space:]')
-ADMIN_ID=$(echo "$ADMIN_ID" | tr -d '[:space:]')
-
-if ! [[ "$TELEGRAM_API_ID" =~ ^[0-9]+$ ]]; then
-    echo -e "${R}❌ API_ID باید فقط عدد باشد!${N}"; exit 1
-fi
-if ! [[ "$ADMIN_ID" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
-    echo -e "${R}❌ ADMIN_ID باید عددی باشد (چند ادمین را با کاما جدا کن)!${N}"; exit 1
-fi
-
-# ─── اگر روت هستیم sudo لازم نیست (روی بعضی سرورها اصلاً نصب نیست) ───
-if [ "$(id -u)" -eq 0 ]; then SUDO=""; else SUDO="sudo"; fi
-
 # ─── Setup Directory ────────────────────────────────────────
 BOT_DIR="$HOME/downloader-bot"
 mkdir -p "$BOT_DIR/downloads"
@@ -81,39 +65,22 @@ echo -e "\n${Y}🐳 در حال بررسی و راه‌اندازی سرور م�
 
 if ! command -v docker &> /dev/null; then
     echo -e "${C}🔄 داکر نصب نیست. در حال نصب خودکار داکر...${N}"
-    curl -fsSL https://get.docker.com | $SUDO sh
-    $SUDO systemctl start docker
-    $SUDO systemctl enable docker
+    curl -fsSL https://get.docker.com | sh
+    sudo systemctl start docker
+    sudo systemctl enable docker
 fi
 
-# اگر کاربر جاری دسترسی مستقیم به داکر ندارد، با sudo اجرا شود
-DOCKER="docker"
-if ! docker info &> /dev/null; then DOCKER="$SUDO docker"; fi
+docker stop telegram-bot-api &> /dev/null
+docker rm telegram-bot-api &> /dev/null
 
-# ربات باید قبل از استفاده روی سرور محلی، از سرور رسمی تلگرام logOut شود
-echo -e "${C}🔄 خارج کردن ربات از سرور رسمی تلگرام (logOut)...${N}"
-curl -s -m 20 "https://api.telegram.org/bot${BOT_TOKEN}/logOut" > /dev/null 2>&1 || true
-
-$DOCKER stop telegram-bot-api &> /dev/null
-$DOCKER rm telegram-bot-api &> /dev/null
-
-if ! $DOCKER run -d \
+docker run -d \
   --name telegram-bot-api \
   --restart always \
-  -p 127.0.0.1:8081:8081 \
+  -p 8081:8081 \
   -v telegram-bot-api-data:/var/lib/telegram-bot-api \
   -e TELEGRAM_API_ID="${TELEGRAM_API_ID}" \
   -e TELEGRAM_API_HASH="${TELEGRAM_API_HASH}" \
-  -e TELEGRAM_LOCAL=1 \
-  aiogram/telegram-bot-api:latest > /dev/null; then
-    echo -e "${R}❌ اجرای کانتینر سرور محلی تلگرام ناموفق بود. خروجی داکر را بررسی کن.${N}"
-    exit 1
-fi
-sleep 3
-if [ -z "$($DOCKER ps -q -f name=telegram-bot-api)" ]; then
-    echo -e "${R}❌ کانتینر بالا نیامد. لاگ: $DOCKER logs telegram-bot-api${N}"
-    exit 1
-fi
+  aiogram/telegram-bot-api:latest
 
 echo -e "${G}✅ سرور محلی تلگرام روی پورت 8081 فعال شد.${N}"
 
@@ -122,15 +89,7 @@ echo -e "${G}✅ سرور محلی تلگرام روی پورت 8081 فعال ش
 # ════════════════════════════════════════════════════════════
 if ! command -v ffmpeg &> /dev/null; then
     echo -e "${C}🔄 اف‌ام‌پگ نصب نیست. در حال نصب ffmpeg...${N}"
-    $SUDO apt-get update && $SUDO apt-get install -y ffmpeg
-fi
-
-# ════════════════════════════════════════════════════════════
-#  پیش‌نیاز پایتون (python3 + pip + venv)
-# ════════════════════════════════════════════════════════════
-if ! command -v python3 &> /dev/null || ! python3 -c "import venv, ensurepip" &> /dev/null; then
-    echo -e "${C}🔄 در حال نصب python3 / pip / venv ...${N}"
-    $SUDO apt-get update -y && $SUDO apt-get install -y python3 python3-pip python3-venv
+    sudo apt-get update && sudo apt-get install -y ffmpeg
 fi
 
 # ════════════════════════════════════════════════════════════
@@ -564,7 +523,7 @@ class Downloader:
             try:
                 with yt_dlp.YoutubeDL(opts) as ydl: ydl.download([url])
                 for f in self.path.iterdir():
-                    if uid in f.name and not f.name.endswith((".part", ".ytdl", ".temp")):
+                    if uid in f.name: 
                         if quality not in ["mp3", "m4a", "photo"]:
                             return self.ensure_faststart(str(f))
                         return str(f)
@@ -580,7 +539,7 @@ class Downloader:
             async with httpx.AsyncClient(timeout=10, follow_redirects=True, verify=False) as client:
                 resp = await client.head(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
                 if resp.status_code >= 400:
-                    resp = await client.get(url, headers={"Range": "bytes=0-1", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+                    resp = await client.get(url, headers={"Range": "bytes=0-1", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}, verify=False)
                 ct = resp.headers.get("Content-Type", "").lower()
                 if "text/html" in ct or "video" in ct or "audio" in ct or "mpegurl" in ct or "m3u8" in ct: return False, filename, ext
                 return True, filename, ext
@@ -1263,7 +1222,7 @@ async def run_video_download(q, ctx, url: str, quality: str, chat_id: int, lang:
 
 def main():
     console.print(Panel("🎬 [bold cyan]Universal Downloader Bot (PRO QUAD-LANG V6)[/bold cyan]", border_style="cyan"))
-    app = Application.builder().token(config.BOT_TOKEN).base_url("http://localhost:8081/bot").base_file_url("http://localhost:8081/file/bot").local_mode(True).read_timeout(600).write_timeout(600).build()
+    app = Application.builder().token(config.BOT_TOKEN).base_url("http://localhost:8081/bot").local_mode(True).read_timeout(600).write_timeout(600).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CallbackQueryHandler(cb_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, msg_handler))
@@ -1292,26 +1251,20 @@ EOF
 # ════════════════════════════════════════════════════════════
 cat > run.sh << 'RUNEOF'
 #!/bin/bash
-cd "$(dirname "$(readlink -f "$0")")" || exit 1
-(docker start telegram-bot-api || sudo docker start telegram-bot-api) &> /dev/null
-./venv/bin/pip install -q --upgrade yt-dlp
-exec ./venv/bin/python bot.py
+cd "$HOME/downloader-bot" || exit 1
+docker start telegram-bot-api &> /dev/null
+pip install -q --upgrade yt-dlp
+python3 bot.py
 RUNEOF
 chmod +x run.sh
 
 # ════════════════════════════════════════════════════════════
 #  نصب پکیج‌ها
 # ════════════════════════════════════════════════════════════
-echo -e "\n${Y}📦 در حال ساخت محیط مجازی و نصب پکیج‌ها (ممکن است چند دقیقه طول بکشد)...${N}"
-if ! python3 -m venv venv; then
-    echo -e "${R}❌ ساخت venv ناموفق بود. دستور: sudo apt-get install -y python3-venv${N}"; exit 1
-fi
-./venv/bin/pip install -q --upgrade pip
-if ! ./venv/bin/pip install -q -r requirements.txt; then
-    echo -e "${R}❌ نصب پکیج‌ها ناموفق بود. اینترنت/DNS سرور را بررسی کن.${N}"; exit 1
-fi
-./venv/bin/pip install -q --upgrade yt-dlp
+echo -e "\n${Y}📦 در حال نصب پکیج‌های جدید و فعال‌سازی موتور مانیتورینگ سرور...${N}"
+pip install -q -r requirements.txt
+pip install -q --upgrade yt-dlp
 echo -e "${G}✅ همه پکیج‌های پیشرفته نصب شدند.${N}"
 
-echo -e "\n${G}🚀 ربات با موفقیت ساخته شد! برای روشن کردن این دستور را بزن:${N}"
-echo -e "${C}bash $BOT_DIR/run.sh${N}\n"
+echo -e "\n${G}🚀 سوپر ربات با موفقیت آپدیت شد! با دستور زیر روشن کن رئیس:${N}"
+echo -e "${C}python3 bot.py${N}\n"
