@@ -59,37 +59,17 @@ mkdir -p "$BOT_DIR/downloads"
 cd "$BOT_DIR"
 
 # ════════════════════════════════════════════════════════════
-#  راه‌اندازی سرور محلی تلگرام (Docker & Local Bot API)
-# ════════════════════════════════════════════════════════════
-echo -e "\n${Y}🐳 در حال بررسی و راه‌اندازی سرور محلی تلگرام...${N}"
-
-if ! command -v docker &> /dev/null; then
-    echo -e "${C}🔄 داکر نصب نیست. در حال نصب خودکار داکر...${N}"
-    curl -fsSL https://get.docker.com | sh
-    sudo systemctl start docker
-    sudo systemctl enable docker
-fi
-
-docker stop telegram-bot-api &> /dev/null
-docker rm telegram-bot-api &> /dev/null
-
-docker run -d \
-  --name telegram-bot-api \
-  --restart always \
-  -p 8081:8081 \
-  -v telegram-bot-api-data:/var/lib/telegram-bot-api \
-  -e TELEGRAM_API_ID="${TELEGRAM_API_ID}" \
-  -e TELEGRAM_API_HASH="${TELEGRAM_API_HASH}" \
-  aiogram/telegram-bot-api:latest
-
-echo -e "${G}✅ سرور محلی تلگرام روی پورت 8081 فعال شد.${N}"
-
-# ════════════════════════════════════════════════════════════
-#  بررسی و نصب FFmpeg جهت تبدیل فرمت‌ها
+#  بررسی FFmpeg جهت تبدیل فرمت‌ها (بدون sudo)
 # ════════════════════════════════════════════════════════════
 if ! command -v ffmpeg &> /dev/null; then
-    echo -e "${C}🔄 اف‌ام‌پگ نصب نیست. در حال نصب ffmpeg...${N}"
-    sudo apt-get update && sudo apt-get install -y ffmpeg
+    echo -e "${C}🔄 اف‌ام‌پگ نصب نیست. در حال تلاش برای نصب...${N}"
+    if command -v sudo &> /dev/null; then
+        sudo apt-get update && sudo apt-get install -y ffmpeg
+    elif [ "$(id -u)" = "0" ]; then
+        apt-get update && apt-get install -y ffmpeg
+    else
+        echo -e "${R}⚠️ نصب خودکار ffmpeg ممکن نشد. دستی نصب کنید: apt-get install ffmpeg${N}"
+    fi
 fi
 
 # ════════════════════════════════════════════════════════════
@@ -114,8 +94,8 @@ BOT_TOKEN   = os.getenv("BOT_TOKEN", "")
 ADMIN_IDS   = list(map(int, os.getenv("ADMIN_IDS", "0").split(",")))
 
 DOWNLOAD_PATH    = "./downloads"
-MAX_FILE_SIZE    = 2 * 1024 * 1024 * 1024  # 2GB Telegram hard limit
-DEFAULT_USER_LIMIT = 200 * 1024 * 1024     # 200MB default limit for normal users
+MAX_FILE_SIZE    = 50 * 1024 * 1024        # 50MB Telegram Bot API hard limit (no local server)
+DEFAULT_USER_LIMIT = 50 * 1024 * 1024      # 50MB default limit for normal users
 
 SUPPORTED_PLATFORMS = {
     "youtube":     {"emoji": "🎬", "name": "YouTube"},
@@ -1222,7 +1202,7 @@ async def run_video_download(q, ctx, url: str, quality: str, chat_id: int, lang:
 
 def main():
     console.print(Panel("🎬 [bold cyan]Universal Downloader Bot (PRO QUAD-LANG V6)[/bold cyan]", border_style="cyan"))
-    app = Application.builder().token(config.BOT_TOKEN).base_url("http://localhost:8081/bot").local_mode(True).read_timeout(600).write_timeout(600).build()
+    app = Application.builder().token(config.BOT_TOKEN).read_timeout(600).write_timeout(600).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CallbackQueryHandler(cb_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, msg_handler))
@@ -1252,8 +1232,7 @@ EOF
 cat > run.sh << 'RUNEOF'
 #!/bin/bash
 cd "$HOME/downloader-bot" || exit 1
-docker start telegram-bot-api &> /dev/null
-pip install -q --upgrade yt-dlp
+python3 -m pip install -q --upgrade yt-dlp
 python3 bot.py
 RUNEOF
 chmod +x run.sh
@@ -1261,9 +1240,14 @@ chmod +x run.sh
 # ════════════════════════════════════════════════════════════
 #  نصب پکیج‌ها
 # ════════════════════════════════════════════════════════════
-echo -e "\n${Y}📦 در حال نصب پکیج‌های جدید و فعال‌سازی موتور مانیتورینگ سرور...${N}"
-pip install -q -r requirements.txt
-pip install -q --upgrade yt-dlp
+echo -e "\n${Y}📦 در حال نصب پکیج‌های جدید...${N}"
+if command -v pip3 &> /dev/null; then
+    PIP_CMD="pip3"
+else
+    PIP_CMD="python3 -m pip"
+fi
+$PIP_CMD install -q -r requirements.txt
+$PIP_CMD install -q --upgrade yt-dlp
 echo -e "${G}✅ همه پکیج‌های پیشرفته نصب شدند.${N}"
 
 echo -e "\n${G}🚀 سوپر ربات با موفقیت آپدیت شد! با دستور زیر روشن کن رئیس:${N}"
